@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphs</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+        }
+
+        .graph-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-gap: 20px;
+            margin-top: 10px;
+        }
+
+        .graph-wrapper {
+            text-align: center;
+        }
+
+        .graph-box {
+            width: 100%;
+            height: 300px;
+            border: 1px solid #000;
+        }
+
+        .graph-title {
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .regenerate-btn {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="graph-container">
+        {% for graph in graphs %}
+            <div class="graph-wrapper">
+                <div class="graph-title">
+                    {% if graph['layout'] and graph['layout']['title'] %}
+                        {{ graph['layout']['title']['text'] }}
+                    {% endif %}
+                </div>
+
+                <div id="graph_{{ loop.index }}" class="graph-box"></div>
+
+                <button class="regenerate-btn" onclick="regenerateGraph({{ loop.index }});">Regenerate Graph</button>
+            </div>
+        {% endfor %}
+    </div>
+
+    <script>
+        // Render all graphs passed from Flask
+        {% for graph in graphs %}
+            var graphData = {{ graph | safe }};
+            var graphId = 'graph_{{ loop.index }}';
+
+            console.log("Graph Data for Graph {{ loop.index }}:", graphData);
+
+            if (typeof graphData === 'object' && graphData.layout) {
+                Plotly.newPlot(graphId, graphData.data, graphData.layout, {responsive: true});
+            } else {
+                console.error("Graph data is missing or incomplete for Graph {{ loop.index }}.");
+            }
+        {% endfor %}
+
+        function regenerateGraph(graphIndex) {
+            fetch('/new_graph', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.graph) {
+                    var graphData = JSON.parse(data.graph);
+                    var graphId = 'graph_' + graphIndex;
+
+                    Plotly.newPlot(graphId, graphData.data, graphData.layout, {responsive: true});
+                } else {
+                    alert('No new graphs available.');
+                }
+            })
+            .catch(error => {
+                console.error('Error regenerating graph:', error);
+                alert('Error regenerating graph.');
+            });
+        }
+    </script>
+
+</body>
+</html>
