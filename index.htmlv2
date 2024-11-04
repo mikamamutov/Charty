@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Upload and Graph Generator</title>
+    <style>
+        .container {
+            width: 90%;
+            max-width: 1200px;
+            margin: auto;
+            padding: 20px;
+        }
+        img {
+            display: block;
+            margin: auto;
+            max-width: 70%;
+        }
+        h3, p {
+            font-size: small;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Upload a CSV File to Generate Graphs</h1>
+        <form method="POST" enctype="multipart/form-data" action="/">
+            <input type="file" name="file">
+            <button type="submit">Upload</button>
+        </form>
+
+        {% if graph_url %}
+            <h2>Generated Graph:</h2>
+            <img src="{{ graph_url }}" alt="Generated Graph">
+            <h3>Explanation:</h3>
+            <p>{{ explanation }}</p>
+            <!-- Button to generate another graph -->
+            <form action="{{ url_for('generate_graph') }}" method="GET">
+                <button type="submit">Generate Another Graph</button>
+            </form>
+        {% else %}
+            <h3>{{ explanation }}</h3>
+        {% endif %}
+    </div>
+</body>
+</html>
