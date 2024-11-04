@@ -1,0 +1,162 @@
+import os
+import re
+import pandas as pd
+import matplotlib.pyplot as plt
+from flask import Flask, request, render_template, redirect, url_for, session
+from openai import OpenAI
+from random import randint
+import logging
+import tempfile
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logging.info("Starting Flask app...")
+
+# Initialize the OpenAI client and Flask app
+client = OpenAI(api_key='')  # Replace with your actual API key
+app = Flask(__name__)
+app.secret_key = ''  # Needed for session handling
+
+# Function to ask ChatGPT to analyze the dataset and return a valid Python dictionary and explanation
+def chat_gpt_analysis(prompt):
+    logging.info("Calling OpenAI API with prompt.")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        logging.info("Received response from OpenAI.")
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"Error calling OpenAI API: {e}")
+        return str(e)
+
+
+# Helper function to generate graphs based on ChatGPT suggestions
+def create_graph(pivot_table):
+    try:
+        logging.info("Generating graph.")
+        fig, ax = plt.subplots(figsize=(10, 6))  # Adjusted for legend space
+
+        # Plot the pivot table as a bar chart
+        pivot_table.plot(kind='bar', ax=ax)
+        plt.title('Generated Graph based on ChatGPT Suggestions')
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize='small')
+        plt.tight_layout(rect=[0, 0, 0.85, 1])  # Layout adjusted for legend
+        plt.xticks(rotation=45, fontsize='small')
+        plt.yticks(fontsize='small')
+
+        graph_path = os.path.join('static', f'graph_{randint(0, 10000)}.png')  # Unique name to avoid caching
+        plt.savefig(graph_path)
+        plt.close()
+        logging.info(f"Graph saved at {graph_path}")
+
+        return graph_path
+    except Exception as e:
+        logging.error(f"Error generating graph: {e}")
+        return str(e)
+
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        logging.info("Received file upload request.")
+        if "file" in request.files:
+            file = request.files["file"]
+            if file.filename != "":
+                logging.info("Saving uploaded CSV to temporary file.")
+                # Save the file to a temporary location instead of session
+                temp_file_path = os.path.join(tempfile.gettempdir(), f"uploaded_file_{randint(0, 10000)}.csv")
+                file.save(temp_file_path)
+                session['file_path'] = temp_file_path  # Only save the file path, not the data
+                session['graph_index'] = 0  # Start with the first graph
+                return redirect(url_for("generate_graph"))
+
+    return render_template("index.html")
+
+
+@app.route("/generate_graph")
+def generate_graph():
+    logging.info("Generating graph based on session data with enhanced summary.")
+    try:
+        # Load dataset from the temporary file path in session
+        temp_file_path = session.get('file_path')
+        if not temp_file_path or not os.path.exists(temp_file_path):
+            return "File not found. Please re-upload."
+
+        df = pd.read_csv(temp_file_path)
+        graph_index = session.get('graph_index', 0)
+
+        # Detect a suitable categorical column (e.g., columns with fewer than 20 unique values)
+        categorical_columns = [col for col in df.columns if df[col].nunique() < 20 and df[col].dtype == 'object']
+        if not categorical_columns:
+            return "No suitable categorical column found for chunk analysis. Please use a different dataset."
+
+        # Use the first suitable categorical column
+        selected_column = categorical_columns[0]
+        unique_values = df[selected_column].unique()
+
+        if graph_index >= len(unique_values):
+            return "No more categories to analyze. Please restart the session."
+
+        # Select the current category (chunk)
+        current_value = unique_values[graph_index]
+        chunk_df = df[df[selected_column] == current_value]
+
+        # Prepare an enhanced summary
+        columns = list(chunk_df.columns)
+        data_summary = chunk_df.describe().to_string()
+        sample_rows = chunk_df.head(10).to_string()
+
+        # New Summary Components
+        value_counts_summary = {col: chunk_df[col].value_counts().to_dict() for col in
+                                chunk_df.select_dtypes(include='object').columns}
+        correlation_summary = chunk_df.corr().to_string()
+        missing_data_summary = chunk_df.isnull().mean() * 100
+        unique_counts = chunk_df.nunique().to_dict()
+
+        # Add these summaries to the prompt
+        user_prompt = (
+            f"Analyzing the data for '{current_value}' in column '{selected_column}'.\n"
+            f"Here are the columns of the dataset: {columns}. "
+            f"Summary:\n{data_summary}\n"
+            f"First 10 rows:\n{sample_rows}\n"
+            f"Category Counts:\n{value_counts_summary}\n"
+            f"Correlations:\n{correlation_summary}\n"
+            f"Missing Data (% per column):\n{missing_data_summary}\n"
+            f"Unique Values per Column:\n{unique_counts}\n"
+            "Generate a valid Python dictionary for a meaningful graph based on this information, using keys (values, index, columns, aggfunc). "
+            "Return ONLY the dictionary on a single line without additional text or explanations."
+        )
+
+        # Get the response from ChatGPT
+        chatgpt_response = chat_gpt_analysis(user_prompt)
+        logging.debug(f"ChatGPT response: {chatgpt_response}")
+
+        try:
+            # Attempt to directly evaluate the response as a dictionary
+            pivot_dict = eval(chatgpt_response.strip())  # Strip whitespace and evaluate
+            explanation = f"Graph generated for '{current_value}' in column '{selected_column}' based on structure: {pivot_dict}" if pivot_dict else "Explanation not provided."
+
+            # Validate and generate the graph
+            if "values" in pivot_dict:
+                pivot_table = pd.pivot_table(chunk_df, **pivot_dict)
+                graph_path = create_graph(pivot_table)
+                session['graph_index'] += 1  # Increment graph index to move to the next chunk in the next request
+            else:
+                graph_path = None
+                explanation = "No meaningful graph can be generated based on this data."
+        except (SyntaxError, IndexError, ValueError) as e:
+            logging.error(f"Error parsing ChatGPT response: {e}")
+            graph_path = None
+            explanation = f"There was an error parsing the response from ChatGPT. Response received: {chatgpt_response}"
+
+        return render_template("index.html", graph_url=graph_path, suggestion=chatgpt_response, explanation=explanation)
+
+    except Exception as e:
+        logging.error(f"Error generating graph: {e}")
+        return "Error generating the graph."
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
